@@ -382,7 +382,7 @@
 #
 # === Copyright
 #
-# Copyright 2015 Simon Fraser University, unless otherwise noted.
+# Copyright 2015 SFU, unless otherwise noted.
 #
 class managedmac::portablehomes (
 
@@ -710,7 +710,7 @@ ${syncBackgroundSetInBackground}")
     'alertOnFailedMounts'                  => $alertOnFailedMounts,
   }
 
-  $organization = hiera('managedmac::organization', 'Simon Fraser University')
+  $organization = hiera('managedmac::organization', 'SFU')
 
   mobileconfig { 'managedmac.portablehomes.alacarte':
     ensure       => $ensure,

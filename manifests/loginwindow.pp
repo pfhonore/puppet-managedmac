@@ -133,6 +133,12 @@
 #   Disable autologin after FileVault EFI is unlocked.
 #   Type: Boolean
 #
+# [*adminhostinfo*]
+#   Show System Info, HostName, OS Version and IP Address
+#   at Login Screen using alt + click on the clock.
+#   Type: String
+#   Suggested Value: HostName
+#
 # === Variables
 #
 # Not applicable
@@ -175,6 +181,8 @@
 #  managedmac::loginwindow::auto_logout_delay: 3600
 #  managedmac::loginwindow::enable_fast_user_switching: false
 #  managedmac::loginwindow::disable_fde_autologin: true
+#  managedmac::loginwindow::adminhostinfo: HostName
+
 
 # Then simply, create a manifest and include the class...
 #
@@ -196,13 +204,14 @@
 #
 # === Copyright
 #
-# Copyright 2015 Simon Fraser University, unless otherwise noted.
+# Copyright 2015 SFU, unless otherwise noted.
 #
 class managedmac::loginwindow (
 
   $users                         = [],
   $groups                        = [],
   $strict                        = true,
+  $adminhostinfo                 = undef,
   $allow_list                    = [],
   $deny_list                     = [],
   $disable_console_access        = undef,
@@ -229,6 +238,10 @@ class managedmac::loginwindow (
 
   validate_array ($users)
   validate_array ($groups)
+
+  if $adminhostinfo {
+    validate_string ($adminhostinfo)
+  }
 
   validate_array ($allow_list)
   validate_array ($deny_list)
@@ -315,6 +328,7 @@ class managedmac::loginwindow (
 
   $params = {
     'com.apple.loginwindow' => {
+      'AdminHostInfo'                              => $adminhostinfo,
       'AllowList'                                  => $allow_list,
       'DenyList'                                   => $deny_list,
       'DisableConsoleAccess'                       =>
@@ -373,7 +387,7 @@ class managedmac::loginwindow (
     strict       => $strict,
   }
 
-  $organization = hiera('managedmac::organization', 'Simon Fraser University')
+  $organization = hiera('managedmac::organization', 'SFU')
 
   mobileconfig { 'managedmac.loginwindow.alacarte':
     ensure       => $mobileconfig_ensure,

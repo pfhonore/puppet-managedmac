@@ -72,7 +72,7 @@
 #
 # === Copyright
 #
-# Copyright 2015 Simon Fraser University, unless otherwise noted.
+# Copyright 2015 SFU, unless otherwise noted.
 #
 class managedmac::users (
 
