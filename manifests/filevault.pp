@@ -49,6 +49,22 @@
 #   Removes FDE if $enable is false and the disk is encrypted.
 #   Type: Boolean
 #
+# [*rsa_pubkey*]
+#   If present, replaces recovery key plist with an encrypted json file.
+#   The encrypted file contents will be reported back to the master via a custom
+#   fact, 'filevault2_recovery.' Only the EnabledDate, SerialNumber,
+#   EnabledUser, and RecoveryKey keys are stored in the encrypted recovery file
+#   in order to reduce filesize. Only works when $output_path is set.
+#
+#   NOTE: The encrypted recovery json is created *only* when a recovery plist is
+#   found– its contents are not managed by Puppet. If the encrypted recovery
+#   file is removed from the node, the 'filevault2_recovery' fact will stop
+#   reporting. Reports are kept in PuppetDB for 14 days by default.
+#   For a complete key escrow solution, the contents of this fact for each node
+#   should be extracted from PuppetDB using a scheduled job.
+#
+#   Type: String
+#
 # === Variables
 #
 # Not applicable
@@ -63,6 +79,10 @@
 # managedmac::filevault::enable: true
 # managedmac::filevault::use_recovery_key: true
 # managedmac::filevault::show_recovery_key: true
+# managedmac::filevault::rsa_pubkey: >
+#   -----BEGIN PUBLIC KEY-----
+#   ...
+#   -----END PUBLIC KEY-----
 #
 # Then simply, create a manifest and include the class...
 #
@@ -85,57 +105,31 @@
 # Copyright 2015 SFU, unless otherwise noted.
 #
 class managedmac::filevault (
+  Optional[Boolean] $enable                    = undef,
+  Optional[Boolean] $use_recovery_key          = undef,
+  Optional[Boolean] $show_recovery_key         = undef,
+  Optional[String]  $output_path               = undef,
+  Optional[Boolean] $use_keychain              = undef,
+  Optional[String]  $keychain_file             = undef,
+  Optional[Boolean] $destroy_fv_key_on_standby = undef,
+  Optional[Boolean] $dont_allow_fde_disable    = undef,
+  Optional[Boolean] $remove_fde                = undef,
+  Optional[String]  $rsa_pubkey                = undef,
+) {
 
-  $enable                     = undef,
-  $use_recovery_key           = undef,
-  $show_recovery_key          = undef,
-  $output_path                = undef,
-  $use_keychain               = undef,
-  $keychain_file              = undef,
-  $destroy_fv_key_on_standby  = undef,
-  $dont_allow_fde_disable     = undef,
-  $remove_fde                 = undef,
+  $execpath  = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 
-){
+  if $enable {
 
-  unless $enable == undef {
-
-    validate_bool ($enable)
-
-    unless $use_recovery_key == undef {
-      validate_bool ($use_recovery_key)
+    if $output_path {
+      validate_absolute_path($output_path)
     }
 
-    unless $show_recovery_key == undef {
-      validate_bool ($show_recovery_key)
-    }
-
-    unless $use_keychain == undef {
-      validate_bool ($use_keychain)
-    }
-
-    unless $destroy_fv_key_on_standby == undef {
-      validate_bool ($destroy_fv_key_on_standby)
-    }
-
-    unless $dont_allow_fde_disable == undef {
-      validate_bool ($dont_allow_fde_disable)
-    }
-
-    unless $remove_fde == undef {
-      validate_bool ($remove_fde)
-    }
-
-    unless $output_path == undef {
-      validate_absolute_path ($output_path)
-    }
-
-    if $use_keychain == true {
+    if $use_keychain {
       if $keychain_file =~ /^puppet:/ {
-        validate_re ($keychain_file,
-          'puppet:(\/{3}(\w+\/)+\w+|\/{2}(\w+\.)+(\w+\/)+\w+)')
+        validate_re($keychain_file, 'puppet:(\/{3}(\w+\/)+\w+|\/{2}(\w+\.)+(\w+\/)+\w+)')
       } else {
-        validate_absolute_path ($keychain_file)
+        validate_absolute_path($keychain_file)
       }
 
       file { 'filevault_master_keychain':
@@ -164,9 +158,7 @@ class managedmac::filevault (
     }
 
     $content = process_mobileconfig_params($params)
-
-    $organization = hiera('managedmac::organization',
-      'SFU')
+    $organization = hiera('managedmac::organization', 'SFU')
 
     $ensure = $enable ? {
       true     => present,
@@ -181,8 +173,73 @@ class managedmac::filevault (
       organization => $organization,
     }
 
-    if ($enable == false) and ($::filevault_active == true) and
-($remove_fde == true)  {
+    if $rsa_pubkey and $output_path {
+
+      $basedir        = dirname($output_path)
+      $basename       = basename($output_path, '.plist')
+      $keypath        = "${::puppet_vardir}/${basename}.pub.pem"
+      $encrypted_key  = '/etc/puppetlabs/puppet/filevault.json.enc.b64'
+
+      if $rsa_pubkey !~ /^-----BEGIN PUBLIC KEY-----/ {
+        fail('Failed to validate RSA public key.')
+      }
+
+      file { $keypath:
+        ensure  => file,
+        content => $rsa_pubkey,
+        before  => Exec['plist_exists'],
+      }
+
+      exec { 'plist_exists':
+        command => 'echo',
+        path    => $execpath,
+        onlyif  => "test -f ${output_path}",
+        notify  => Exec['encrypt_recovery'],
+      }
+
+      exec { 'rm_hardwareuuid':
+        command => "defaults delete ${output_path} HardwareUUID",
+        path    => $execpath,
+        onlyif  => "defaults read ${output_path} HardwareUUID",
+      }
+
+      exec { 'rm_lvguuid':
+        command => "defaults delete ${output_path} LVGUUID",
+        path    => $execpath,
+        onlyif  => "defaults read ${output_path} LVGUUID",
+      }
+
+      exec { 'rm_lvuuid':
+        command => "defaults delete ${output_path} LVUUID",
+        path    => $execpath,
+        onlyif  => "defaults read ${output_path} LVUUID",
+      }
+
+      exec { 'rm_pvuuid':
+        command => "defaults delete ${output_path} PVUUID",
+        path    => $execpath,
+        onlyif  => "defaults read ${output_path} PVUUID",
+      }
+
+      $cmd = "plutil -convert json ${output_path} -o - | openssl rsautl -encrypt -pubin -inkey ${keypath} | openssl base64 -out ${encrypted_key}"
+
+      exec { 'encrypt_recovery':
+        command     => $cmd,
+        path        => $execpath,
+        refreshonly => true,
+        require     => Exec['rm_hardwareuuid', 'rm_lvguuid', 'rm_lvuuid', 'rm_pvuuid'],
+        notify      => File[$output_path],
+      }
+
+      file { $output_path:
+        ensure      => absent,
+        backup      => false,
+        show_diff   => false,
+        require     => Exec['encrypt_recovery'],
+      }
+    }
+
+    if $enable and $::filevault_active and $remove_fde {
       exec { 'decrypt_the_disk':
         command => '/usr/bin/fdesetup disable',
         returns => [0,1],
