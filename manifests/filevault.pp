@@ -50,18 +50,25 @@
 #   Type: Boolean
 #
 # [*rsa_pubkey*]
+#   An RSA public key, as a string. See example below for how this should look in hiera.
 #   If present, replaces recovery key plist with an encrypted json file.
 #   The encrypted file contents will be reported back to the master via a custom
-#   fact, 'filevault2_recovery.' Only the EnabledDate, SerialNumber,
+#   fact, $::filevault2_recovery_key. Only the EnabledDate, SerialNumber,
 #   EnabledUser, and RecoveryKey keys are stored in the encrypted recovery file
 #   in order to reduce filesize. Only works when $output_path is set.
 #
 #   NOTE: The encrypted recovery json is created *only* when a recovery plist is
 #   found– its contents are not managed by Puppet. If the encrypted recovery
-#   file is removed from the node, the 'filevault2_recovery' fact will stop
+#   file is removed from the node, the $::filevault2_recovery_key fact will stop
 #   reporting. Reports are kept in PuppetDB for 14 days by default.
 #   For a complete key escrow solution, the contents of this fact for each node
 #   should be extracted from PuppetDB using a scheduled job.
+#
+#   To create the required rsa public key:
+#   1. Generate a new ssh key.
+#   https://help.github.com/articles/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent/
+#   2. Extract the public key from public certificate. This key will be used as the value for $rsa_pubkey.
+#   `openssl rsa -in /foo/bar/mykey_rsa -pubout > /foo/bar/mykey_rsa.pub.pem`
 #
 #   Type: String
 #
@@ -81,7 +88,10 @@
 # managedmac::filevault::show_recovery_key: true
 # managedmac::filevault::rsa_pubkey: >
 #   -----BEGIN PUBLIC KEY-----
-#   ...
+#   MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEApXCDBlITs3LnTa3POPJg
+#   R8P/nLWy2tbMSI7D51CPU4TxeptkCYVGEWX4wKkS6lqxtfLP9mjQcDQsOFLXKbyl
+#   ...lots of base64 endcoded text...
+#   uZeGNWzQkl8d8zm87NPDDfkCAwEAAQ==
 #   -----END PUBLIC KEY-----
 #
 # Then simply, create a manifest and include the class...
@@ -173,6 +183,7 @@ class managedmac::filevault (
       organization => $organization,
     }
 
+    # Encrypt the key on disk
     if $rsa_pubkey and $output_path {
 
       $basedir        = dirname($output_path)
@@ -194,9 +205,11 @@ class managedmac::filevault (
         command => 'echo',
         path    => $execpath,
         onlyif  => "test -f ${output_path}",
-        notify  => Exec['encrypt_recovery'],
+        notify  => Exec['encrypt_recovery_key'],
       }
 
+      # Remove unneeded keys from the plist to reduce filesize.
+      # File must be < 240 bytes to be encrypted w/ rsa public key.
       exec { 'rm_hardwareuuid':
         command => "defaults delete ${output_path} HardwareUUID",
         path    => $execpath,
@@ -221,10 +234,11 @@ class managedmac::filevault (
         onlyif  => "defaults read ${output_path} PVUUID",
       }
 
-      $cmd = "plutil -convert json ${output_path} -o - | openssl rsautl -encrypt -pubin -inkey ${keypath} | openssl base64 -out ${encrypted_key}"
+      # Command to convert recovery plist to JSON and encrypt with public rsa key
+      $enc_cmd = "plutil -convert json ${output_path} -o - | openssl rsautl -encrypt -pubin -inkey ${keypath} | openssl base64 -out ${encrypted_key}"
 
-      exec { 'encrypt_recovery':
-        command     => $cmd,
+      exec { 'encrypt_recovery_key':
+        command     => $enc_cmd,
         path        => $execpath,
         refreshonly => true,
         require     => Exec['rm_hardwareuuid', 'rm_lvguuid', 'rm_lvuuid', 'rm_pvuuid'],
@@ -235,11 +249,11 @@ class managedmac::filevault (
         ensure      => absent,
         backup      => false,
         show_diff   => false,
-        require     => Exec['encrypt_recovery'],
+        require     => Exec['encrypt_recovery_key'],
       }
     }
 
-    if $enable and $::filevault_active and $remove_fde {
+    if !$enable and $::filevault_active and $remove_fde {
       exec { 'decrypt_the_disk':
         command => '/usr/bin/fdesetup disable',
         returns => [0,1],
