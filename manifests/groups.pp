@@ -91,7 +91,7 @@ class managedmac::groups (
 
       validate_raw_constructor ($accounts)
       validate_hash ($defaults)
-      create_resources(group, $accounts, $defaults)
+      create_resources(macgroup, $accounts, $defaults)
 
     }
   }
